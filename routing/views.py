@@ -18,20 +18,19 @@ def load_fuel_prices():
         with open(CSV_FILE_PATH, mode='r') as file:
             reader = csv.DictReader(file)
             for row in reader:
-                # Use 'City' and 'Retail Price' to build the fuel data dictionary
-                city = row.get('City')  # Fetch the city name
-                retail_price = row.get('Retail Price')  # Fetch the retail price for fuel
+                city = row.get('City')
+                retail_price = row.get('Retail Price')
 
                 if city and retail_price:
-                    fuel_data[city] = float(retail_price)  # Store the fuel price for each city
+                    fuel_data[city] = float(retail_price)
                 else:
-                    print(f"Missing data in row: {row}")  # Print if any key data is missing
+                    print(f"Missing data in row: {row}")
     except FileNotFoundError:
         raise Exception(f"CSV file not found at path: {CSV_FILE_PATH}")
     return fuel_data
+
 # Load the fuel prices from the CSV file at the module level
 fuel_prices = load_fuel_prices()
-
 
 @require_GET
 def calculate_route(request):
@@ -79,16 +78,6 @@ def calculate_route(request):
         route_data = response_data.get('paths', [])[0]
         instructions = route_data.get('instructions', [])
 
-        # Format instructions into a user-friendly list
-        formatted_instructions = []
-        for instruction in instructions:
-            formatted_instructions.append({
-                'text': instruction.get('text'),
-                'distance': instruction.get('distance'),
-                'time': instruction.get('time'),
-                'street_name': instruction.get('street_name', 'Unknown'),
-            })
-
         # Total distance and time
         total_distance_km = route_data['distance'] / 1000  # Convert meters to kilometers
         total_time_sec = route_data['time'] / 1000  # Convert milliseconds to seconds
@@ -96,15 +85,30 @@ def calculate_route(request):
         # Calculate total distance in miles
         total_distance_miles = total_distance_km / 1.60934
 
-        # Calculate fuel used and cost based on fuel prices at the start location
+        # Check if the distance exceeds 500 miles
+        if total_distance_miles > 500:
+            return JsonResponse({'error': 'The route exceeds the maximum allowed distance of 500 miles.'}, status=400)
+
+        # Calculate fuel used
         fuel_efficiency_mpg = 10  # 10 miles per gallon
-
-        # Fetch the fuel price from the CSV data
-        start_location_name = start_location.address.split(",")[0]  # Simplified for location name
-        cost_per_gallon = fuel_prices.get(start_location_name, 3.5)  # Default to 3.5 if not found
-
         total_fuel_used_gallons = total_distance_miles / fuel_efficiency_mpg
-        total_fuel_cost = total_fuel_used_gallons * cost_per_gallon
+
+        # Create a list to hold fuel price information at the fuel stations
+        fuel_stations = []
+        total_fuel_cost = 0
+
+        # Calculate fuel costs and collect fuel station information
+        for instruction in instructions:
+            # Assuming that each instruction provides some way to derive a location
+            city_name = instruction.get('street_name', 'Unknown')
+            cost_per_gallon = fuel_prices.get(city_name, None)
+
+            if cost_per_gallon is not None:
+                fuel_stations.append({
+                    'city': city_name,
+                    'cost_per_gallon': cost_per_gallon,
+                })
+                total_fuel_cost += total_fuel_used_gallons * cost_per_gallon
 
         # Create the final response
         response_data = {
@@ -112,7 +116,16 @@ def calculate_route(request):
             'total_time_sec': total_time_sec,
             'total_fuel_used_gallons': total_fuel_used_gallons,
             'total_fuel_cost': total_fuel_cost,
-            'instructions': formatted_instructions,
+            'instructions': [
+                {
+                    'text': instruction.get('text'),
+                    'distance': instruction.get('distance'),
+                    'time': instruction.get('time'),
+                    'street_name': instruction.get('street_name', 'Unknown'),
+                }
+                for instruction in instructions
+            ],
+            'fuel_stations': fuel_stations,
         }
 
         return JsonResponse(response_data)
